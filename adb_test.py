@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # Copyright 2014 Google Inc. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,196 +15,200 @@
 """Tests for adb."""
 
 import cStringIO
+import logging
 import struct
 import unittest
+import sys
+
+
+import common_mock
+
 
 from adb import adb_commands
 from adb import adb_protocol
-import common_stub
 
 
 BANNER = 'blazetest'
-LOCAL_ID = 1
+LOCAL_ID = 16
 REMOTE_ID = 2
+
+
+def _ConvertCommand(command):
+  return sum(ord(c) << (i * 8) for i, c in enumerate(command))
+
+
+def _MakeHeader(command, arg0, arg1, data):
+  command = _ConvertCommand(command)
+  magic = command ^ 0xFFFFFFFF
+  checksum = adb_protocol._CalculateChecksum(data)
+  return struct.pack('<6I', command, arg0, arg1, len(data), checksum, magic)
+
+
+def _MakeSyncHeader(command, *int_parts):
+  command = _ConvertCommand(command)
+  return struct.pack('<%dI' % (len(int_parts) + 1), command, *int_parts)
+
+
+def _MakeWriteSyncPacket(command, data='', size=None):
+  return _MakeSyncHeader(command, size or len(data)) + data
 
 
 class BaseAdbTest(unittest.TestCase):
 
-  @classmethod
-  def _ExpectWrite(cls, usb, command, arg0, arg1, data):
-    usb.ExpectWrite(cls._MakeHeader(command, arg0, arg1, data))
-    usb.ExpectWrite(data)
-    if command == 'WRTE':
-      cls._ExpectRead(usb, 'OKAY', 0, 0)
+  def setUp(self):
+    super(BaseAdbTest, self).setUp()
+    self.usb = common_mock.MockUsb()
 
-  @classmethod
-  def _ExpectRead(cls, usb, command, arg0, arg1, data=''):
-    usb.ExpectRead(cls._MakeHeader(command, arg0, arg1, data))
+  def tearDown(self):
+    try:
+      self.usb.Close()
+    finally:
+      super(BaseAdbTest, self).tearDown()
+
+  def _ExpectWrite(self, command, arg0, arg1, data):
+    self.usb.ExpectWrite(_MakeHeader(command, arg0, arg1, data))
+    self.usb.ExpectWrite(data)
+    if command == 'WRTE':
+      self._ExpectRead('OKAY', REMOTE_ID, LOCAL_ID)
+
+  def _ExpectRead(self, command, arg0, arg1, data=''):
+    self.usb.ExpectRead(_MakeHeader(command, arg0, arg1, data))
     if data:
-      usb.ExpectRead(data)
+      self.usb.ExpectRead(data)
     if command == 'WRTE':
-      cls._ExpectWrite(usb, 'OKAY', LOCAL_ID, REMOTE_ID, '')
+      self._ExpectWrite('OKAY', LOCAL_ID, REMOTE_ID, '')
 
-  @classmethod
-  def _ConvertCommand(cls, command):
-    return sum(ord(c) << (i * 8) for i, c in enumerate(command))
+  def _ExpectConnection(self):
+    self._ExpectWrite('CNXN', 0x01000000, 256*1024, 'host::%s\0' % BANNER)
+    self._ExpectRead('CNXN', 0x01000000, 4096, 'device::\0')
 
-  @classmethod
-  def _MakeHeader(cls, command, arg0, arg1, data):
-    command = cls._ConvertCommand(command)
-    magic = command ^ 0xFFFFFFFF
-    checksum = adb_protocol.AdbMessage.CalculateChecksum(data)
-    return struct.pack('<6I', command, arg0, arg1, len(data), checksum, magic)
+  def _ExpectOpen(self, service):
+    self._ExpectWrite('OPEN', LOCAL_ID, 0, service)
+    self._ExpectRead('OKAY', REMOTE_ID, LOCAL_ID)
 
-  @classmethod
-  def _ExpectConnection(cls, usb):
-    cls._ExpectWrite(usb, 'CNXN', 0x01000000, 4096, 'host::%s\0' % BANNER)
-    cls._ExpectRead(usb, 'CNXN', 0, 0, 'device::\0')
+  def _ExpectClose(self):
+    self._ExpectRead('CLSE', REMOTE_ID, LOCAL_ID)
+    # TODO(maruel): The new adb_protocol doesn't bother sending a CLSE back.
+    # self._ExpectWrite('CLSE', LOCAL_ID, REMOTE_ID, '')
 
-  @classmethod
-  def _ExpectOpen(cls, usb, service):
-    cls._ExpectWrite(usb, 'OPEN', LOCAL_ID, 0, service)
-    cls._ExpectRead(usb, 'OKAY', REMOTE_ID, LOCAL_ID)
-
-  @classmethod
-  def _ExpectClose(cls, usb):
-    cls._ExpectRead(usb, 'CLSE', REMOTE_ID, 0)
-    cls._ExpectWrite(usb, 'CLSE', LOCAL_ID, REMOTE_ID, '')
-
-  @classmethod
-  def _Connect(cls, usb):
-    return adb_commands.AdbCommands.Connect(usb, BANNER)
+  def _Connect(self):
+    return adb_commands.AdbCommands.Connect(
+        self.usb, BANNER, rsa_keys=[], auth_timeout_ms=0)
 
 
 class AdbTest(BaseAdbTest):
 
-  @classmethod
-  def _ExpectCommand(cls, service, command, *responses):
-    usb = common_stub.StubUsb()
-    cls._ExpectConnection(usb)
-    cls._ExpectOpen(usb, '%s:%s\0' % (service, command))
-
+  def _ExpectCommand(self, service, command, *responses):
+    self._ExpectConnection()
+    self._ExpectOpen('%s:%s\0' % (service, command))
     for response in responses:
-      cls._ExpectRead(usb, 'WRTE', REMOTE_ID, 0, response)
-    cls._ExpectClose(usb)
-    return usb
-
-  def testConnect(self):
-    usb = common_stub.StubUsb()
-    self._ExpectConnection(usb)
-
-    adb_commands.AdbCommands.Connect(usb, BANNER)
+      self._ExpectRead('WRTE', REMOTE_ID, LOCAL_ID, response)
+    self._ExpectClose()
 
   def testSmallResponseShell(self):
     command = 'keepin it real'
     response = 'word.'
-    usb = self._ExpectCommand('shell', command, response)
+    self._ExpectCommand('shell', command, response)
 
-    adb_commands = self._Connect(usb)
-    self.assertEqual(response, adb_commands.Shell(command))
+    cmd = self._Connect()
+    self.assertEqual(response, cmd.Shell(command))
+    cmd.Close()
 
   def testBigResponseShell(self):
     command = 'keepin it real big'
-    # The data doesn't have to be big, the point is that it just concatenates
-    # the data from different WRTEs together.
-    responses = ['other stuff, ', 'and some words.']
+    responses = ['other stuff, ', 'and some words.'] * 50
+    self._ExpectCommand('shell', command, *responses)
 
-    usb = self._ExpectCommand('shell', command, *responses)
-
-    adb_commands = self._Connect(usb)
-    self.assertEqual(''.join(responses), adb_commands.Shell(command))
+    cmd = self._Connect()
+    self.assertEqual(''.join(responses), cmd.Shell(command))
+    cmd.Close()
 
   def testStreamingResponseShell(self):
     command = 'keepin it real big'
     # expect multiple lines
-
     responses = ['other stuff, ', 'and some words.']
+    self._ExpectCommand('shell', command, *responses)
 
-    usb = self._ExpectCommand('shell', command, *responses)
-
-    adb_commands = self._Connect(usb)
-    response_count = 0
-    for (expected,actual) in zip(responses, adb_commands.StreamingShell(command)):
-      self.assertEqual(expected, actual)
-      response_count = response_count + 1
-    self.assertEqual(len(responses), response_count)
+    cmd = self._Connect()
+    actual = ''.join(cmd.StreamingShell(command))
+    self.assertEqual(''.join(responses), actual)
+    cmd.Close()
 
   def testReboot(self):
-    usb = self._ExpectCommand('reboot', '', '')
-    adb_commands = self._Connect(usb)
-    adb_commands.Reboot()
+    self._ExpectCommand('reboot', '', '')
+    cmd = self._Connect()
+    cmd.Reboot()
+    cmd.Close()
 
   def testRebootBootloader(self):
-    usb = self._ExpectCommand('reboot', 'bootloader', '')
-    adb_commands = self._Connect(usb)
-    adb_commands.RebootBootloader()
+    self._ExpectCommand('reboot', 'bootloader', '')
+    cmd = self._Connect()
+    cmd.RebootBootloader()
+    cmd.Close()
 
   def testRemount(self):
-    usb = self._ExpectCommand('remount', '', '')
-    adb_commands = self._Connect(usb)
-    adb_commands.Remount()
+    self._ExpectCommand('remount', '', '')
+    cmd = self._Connect()
+    cmd.Remount()
+    cmd.Close()
 
   def testRoot(self):
-    usb = self._ExpectCommand('root', '', '')
-    adb_commands = self._Connect(usb)
-    adb_commands.Root()
+    self._ExpectCommand('root', '', '')
+    cmd = self._Connect()
+    cmd.Root()
+    cmd.Close()
 
 
 class FilesyncAdbTest(BaseAdbTest):
 
-  @classmethod
-  def _MakeSyncHeader(cls, command, *int_parts):
-    command = cls._ConvertCommand(command)
-    return struct.pack('<%dI' % (len(int_parts) + 1), command, *int_parts)
+  def _ExpectClose(self):
+    # TODO(maruel): There's an inconsistency between sync protocol and raw adb
+    # protocol.
+    self._ExpectWrite('CLSE', LOCAL_ID, REMOTE_ID, '')
+    self._ExpectRead('CLSE', REMOTE_ID, LOCAL_ID)
 
-  @classmethod
-  def _MakeWriteSyncPacket(cls, command, data='', size=None):
-    return cls._MakeSyncHeader(command, size or len(data)) + data
-
-  @classmethod
-  def _ExpectSyncCommand(cls, write_commands, read_commands):
-    usb = common_stub.StubUsb()
-    cls._ExpectConnection(usb)
-    cls._ExpectOpen(usb, 'sync:\0')
-
+  def _ExpectSyncCommand(self, write_commands, read_commands):
+    self._ExpectConnection()
+    self._ExpectOpen('sync:\0')
     while write_commands or read_commands:
       if write_commands:
         command = write_commands.pop(0)
-        cls._ExpectWrite(usb, 'WRTE', LOCAL_ID, REMOTE_ID, command)
-
+        self._ExpectWrite('WRTE', LOCAL_ID, REMOTE_ID, command)
       if read_commands:
         command = read_commands.pop(0)
-        cls._ExpectRead(usb, 'WRTE', REMOTE_ID, LOCAL_ID, command)
+        self._ExpectRead('WRTE', REMOTE_ID, LOCAL_ID, command)
 
-    cls._ExpectClose(usb)
-    return usb
+    self._ExpectClose()
 
   def testPush(self):
     filedata = 'alo there, govnah'
     mtime = 100
-
     send = [
-        self._MakeWriteSyncPacket('SEND', '/data,33272'),
-        self._MakeWriteSyncPacket('DATA', filedata),
-        self._MakeWriteSyncPacket('DONE', size=mtime),
+        _MakeWriteSyncPacket('SEND', '/data,33272'),
+        _MakeWriteSyncPacket('DATA', filedata),
+        _MakeWriteSyncPacket('DONE', size=mtime),
     ]
     data = 'OKAY\0\0\0\0'
-    usb = self._ExpectSyncCommand([''.join(send)], [data])
 
-    adb_commands = self._Connect(usb)
-    adb_commands.Push(cStringIO.StringIO(filedata), '/data', mtime=mtime)
+    self._ExpectSyncCommand([''.join(send)], [data])
+    self._Connect().Push(cStringIO.StringIO(filedata), '/data', mtime=mtime)
 
   def testPull(self):
     filedata = "g'ddayta, govnah"
-
-    recv = self._MakeWriteSyncPacket('RECV', '/data')
+    recv = _MakeWriteSyncPacket('RECV', '/data')
     data = [
-        self._MakeWriteSyncPacket('DATA', filedata),
-        self._MakeWriteSyncPacket('DONE'),
+        _MakeWriteSyncPacket('DATA', filedata),
+        _MakeWriteSyncPacket('DONE'),
     ]
-    usb = self._ExpectSyncCommand([recv], [''.join(data)])
-    adb_commands = self._Connect(usb)
-    self.assertEqual(filedata, adb_commands.Pull('/data'))
+
+    self._ExpectSyncCommand([recv], [''.join(data)])
+    self.assertEqual(filedata, self._Connect().Pull('/data'))
+
 
 if __name__ == '__main__':
+  if '-v' in sys.argv:
+    logging.basicConfig(level=logging.DEBUG)  # pragma: no cover
+    adb_protocol._LOG.setLevel(logging.DEBUG)  # pragma: no cover
+  else:
+    logging.basicConfig(level=logging.ERROR)
   unittest.main()

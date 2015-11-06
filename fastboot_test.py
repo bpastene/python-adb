@@ -14,33 +14,37 @@
 """Tests for adb.fastboot."""
 
 import cStringIO
+import logging
 import os
+import sys
 import tempfile
 import unittest
 
-import gflags
+import common_mock
 
-import common_stub
+from adb import adb_protocol
 from adb import fastboot
 
-FLAGS = gflags.FLAGS
+
+def _SumLengths(items):
+  return sum(len(item) for item in items)
+
 
 class FastbootTest(unittest.TestCase):
 
   def setUp(self):
-    self.usb = common_stub.StubUsb()
+    super(FastbootTest, self).setUp()
+    self.usb = common_mock.MockUsb()
 
-  @staticmethod
-  def _SumLengths(items):
-    return sum(len(item) for item in items)
+  def tearDown(self):
+    try:
+      self.usb.Close()
+    finally:
+      super(FastbootTest, self).tearDown()
 
-  def ExpectDownload(self, writes, succeed=True, accept_data=True):
-    self.usb.ExpectWrite('download:%08x' % self._SumLengths(writes))
-
-    if accept_data:
-      self.usb.ExpectRead('DATA%08x' % self._SumLengths(writes))
-    else:
-      self.usb.ExpectRead('DATA%08x' % (self._SumLengths(writes) - 2))
+  def ExpectDownload(self, writes, succeed=True):
+    self.usb.ExpectWrite('download:%08x' % _SumLengths(writes))
+    self.usb.ExpectRead('DATA%08x' % _SumLengths(writes))
 
     for data in writes:
       self.usb.ExpectWrite(data)
@@ -61,33 +65,32 @@ class FastbootTest(unittest.TestCase):
   def testDownload(self):
     raw = 'aoeuidhtnsqjkxbmwpyfgcrl'
     data = cStringIO.StringIO(raw)
-
     self.ExpectDownload([raw])
-    commands = fastboot.FastbootCommands(self.usb)
 
+    commands = fastboot.FastbootCommands(self.usb)
     response = commands.Download(data)
     self.assertEqual('Result', response)
 
   def testDownloadFail(self):
     raw = 'aoeuidhtnsqjkxbmwpyfgcrl'
     data = cStringIO.StringIO(raw)
-
     self.ExpectDownload([raw], succeed=False)
+
     commands = fastboot.FastbootCommands(self.usb)
     with self.assertRaises(fastboot.FastbootRemoteFailure):
       commands.Download(data)
 
-    data = cStringIO.StringIO(raw)
-    self.ExpectDownload([raw], accept_data=False)
+    self.usb.ExpectWrite('download:%08x' % _SumLengths([raw]))
+    self.usb.ExpectRead('DATA%08x' % (_SumLengths([raw]) - 2))
+
     with self.assertRaises(fastboot.FastbootTransferError):
-      commands.Download(data)
+      commands.Download(cStringIO.StringIO(raw))
 
   def testFlash(self):
     partition = 'yarr'
-
     self.ExpectFlash(partition)
-    commands = fastboot.FastbootCommands(self.usb)
 
+    commands = fastboot.FastbootCommands(self.usb)
     output = cStringIO.StringIO()
     def InfoCb(message):
       if message.header == 'INFO':
@@ -98,10 +101,9 @@ class FastbootTest(unittest.TestCase):
 
   def testFlashFail(self):
     partition = 'matey'
-
     self.ExpectFlash(partition, succeed=False)
-    commands = fastboot.FastbootCommands(self.usb)
 
+    commands = fastboot.FastbootCommands(self.usb)
     with self.assertRaises(fastboot.FastbootRemoteFailure):
       commands.Flash(partition)
 
@@ -115,7 +117,7 @@ class FastbootTest(unittest.TestCase):
     progresses = []
 
     pieces = []
-    chunk_size = FLAGS.fastboot_write_chunk_size_kb * 1024
+    chunk_size = fastboot.FASTBOOT_WRITE_CHUNK_SIZE_KB * 1024
     while raw:
       pieces.append(raw[:chunk_size])
       raw = raw[chunk_size:]
@@ -172,4 +174,9 @@ class FastbootTest(unittest.TestCase):
 
 
 if __name__ == '__main__':
+  if '-v' in sys.argv:
+    logging.basicConfig(level=logging.DEBUG)  # pragma: no cover
+    fastboot._LOG.setLevel(logging.DEBUG)  # pragma: no cover
+  else:
+    logging.basicConfig(level=logging.ERROR)
   unittest.main()

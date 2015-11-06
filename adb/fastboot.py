@@ -20,18 +20,15 @@ import logging
 import os
 import struct
 
-import gflags
+from adb import common
+from adb import usb_exceptions
 
-import common
-import usb_exceptions
-
-FLAGS = gflags.FLAGS
-gflags.DEFINE_integer('fastboot_write_chunk_size_kb', 4,
-                      'The size of packets to write to usb, this is set to 4 '
-                      "for legacy reasons.  We've had success with 1MB "
-                      'DRASTICALLY decreasing flashing times.')
+# The size of packets to write to usb, this is set to 4 for legacy reasons.
+# We've had success with 1MB DRASTICALLY decreasing flashing times.
+FASTBOOT_WRITE_CHUNK_SIZE_KB = 1024
 
 _LOG = logging.getLogger('fastboot')
+_LOG.setLevel(logging.ERROR)
 
 DEFAULT_MESSAGE_CALLBACK = lambda m: logging.info('Got %s from device', m)
 FastbootMessage = collections.namedtuple(  # pylint: disable=invalid-name
@@ -195,7 +192,7 @@ class FastbootProtocol(object):
       progress = self._HandleProgress(length, progress_callback)
       progress.next()
     while length:
-      tmp = data.read(FLAGS.fastboot_write_chunk_size_kb * 1024)
+      tmp = data.read(FASTBOOT_WRITE_CHUNK_SIZE_KB * 1024)
       length -= len(tmp)
       self.usb.BulkWrite(tmp)
 

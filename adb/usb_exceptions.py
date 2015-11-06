@@ -14,8 +14,11 @@
 """Common exceptions for ADB and Fastboot."""
 
 
-class CommonUsbError(Exception):
-  """Base class for usb communication errors."""
+class CommonUsbError(IOError):
+  """Base class for usb communication errors.
+
+  Inherits from IOError since they are all related to I/O.
+  """
 
 
 class FormatMessageWithArgumentsException(CommonUsbError):
@@ -51,9 +54,9 @@ class LibusbWrappingError(CommonUsbError):
     super(LibusbWrappingError, self).__init__(msg)
     self.usb_error = usb_error
 
-  def __str__(self):
+  def __str__(self):  # pragma: no cover
     return '%s: %s' % (
-        super(LibusbWrappingError, self).__str__(), str(self.usb_error))
+        super(LibusbWrappingError, self).__str__(), repr(self.usb_error))
 
 
 class WriteFailedError(LibusbWrappingError):
@@ -65,8 +68,6 @@ class ReadFailedError(LibusbWrappingError):
 
 
 class AdbCommandFailureException(Exception):
-  """ADB Command returned a FAIL."""
+  """ADB Command returned a FAIL.
 
-
-class AdbOperationException(Exception):
-  """Failed to communicate over adb with device after multiple retries."""
+  This is an high level application error."""
