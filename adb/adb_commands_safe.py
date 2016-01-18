@@ -207,7 +207,11 @@ class AdbCommandsSafe(object):
     return None
 
   def List(self, destdir):
-    """List a directory on the device."""
+    """List a directory on the device.
+
+    Returns:
+      list of file_sync_protocol.DeviceFile.
+    """
     assert destdir.startswith('/'), destdir
     if self._adb_cmd:
       for _ in self._Loop():
