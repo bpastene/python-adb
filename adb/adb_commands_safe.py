@@ -441,7 +441,7 @@ class AdbCommandsSafe(object):
     if len(parts) > 1:
       try:
         exit_code = int(parts[1])
-      except IndexError, ValueError:
+      except (IndexError, ValueError):
         # The exit code wasn't output.
         parts[0] += '\n' + parts[1]
     else:
@@ -669,7 +669,10 @@ class AdbCommandsSafe(object):
         return True
     # Enumerate the devices present to help.
     def fn(h):
-      return '%s:%s' % (h.port_path, h.serial_number)
+      try:
+        return '%s:%s' % (h.port_path, h.serial_number)
+      except common.libusb1.USBError:
+        return '%s' % (h.port_path,)
     devices = '; '.join(
         fn(h) for h in
         common.UsbHandle.FindDevicesSafe(DeviceIsAvailable, timeout_ms=1000))
