@@ -18,7 +18,7 @@ import sys
 import unittest
 
 
-from adb import high
+from adb.contrib import high
 
 
 class MockDevice(object):

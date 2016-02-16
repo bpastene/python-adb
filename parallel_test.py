@@ -19,9 +19,7 @@ import sys
 import unittest
 
 
-THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(THIS_DIR))
-from adb import parallel
+from adb.contrib import parallel
 
 
 class Foo(Exception):

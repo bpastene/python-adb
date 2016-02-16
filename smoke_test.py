@@ -34,11 +34,11 @@ import unittest
 import usb1
 
 
-from adb import adb_commands_safe
 from adb import adb_protocol
 from adb import common
-from adb import high
 from adb import usb_exceptions
+from adb.contrib import adb_commands_safe
+from adb.contrib import high
 
 
 class Filter(object):
