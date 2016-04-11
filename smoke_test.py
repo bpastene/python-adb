@@ -74,8 +74,11 @@ def FindDevice(on_error, serial, timeout_ms=1000):  # pragma: no cover
   """
   # Find the usb path for this device, so the next operations are done with
   # the usb path.
-  handle = common.UsbHandle.Find(
-      adb_commands_safe.DeviceIsAvailable, serial=serial, timeout_ms=timeout_ms)
+  if ':' in serial:
+    handle = common.TcpHandle(serial, timeout_ms=timeout_ms)
+  else:
+    handle = common.UsbHandle.Find(adb_commands_safe.DeviceIsAvailable,
+                                   serial=serial, timeout_ms=timeout_ms)
   if handle:
     path = '/'.join(map(str, handle.port_path))
     logging.info('Automatically selected %s : %s', path, serial)
@@ -128,7 +131,7 @@ class Test(unittest.TestCase):
         self.__class__.PORT_PATH = self.cmd.port_path
 
   def test_GetDevices(self):
-    devices = high.GetDevices(
+    devices = high.GetLocalDevices(
         banner='python-adb', default_timeout_ms=1000, auth_timeout_ms=1000)
     try:
       self.assertEqual(
@@ -395,7 +398,7 @@ def main():
   high._LOG.setLevel(level)
 
   # Excercise this function before initialization.
-  assert high.GetDevices('python-adb', 1000, 1000) == []
+  assert high.GetLocalDevices('python-adb', 1000, 1000) == []
 
   Test.KEYS = high.Initialize(None, None)
   if not Test.KEYS:
